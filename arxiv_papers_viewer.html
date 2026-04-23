@@ -1,0 +1,956 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>arXiv 论文雷达</title>
+    <style>
+        :root {
+            --ink: #1c2522;
+            --muted: #60706a;
+            --paper: #ffffff;
+            --page: #f4f7f2;
+            --line: #dbe4dc;
+            --teal: #0f766e;
+            --teal-soft: #d9f1ed;
+            --amber: #b45309;
+            --amber-soft: #ffe8bf;
+            --red: #b42318;
+            --red-soft: #fee4e2;
+            --green: #157347;
+            --green-soft: #dff5e8;
+            --shadow: 0 10px 24px rgba(28, 37, 34, 0.08);
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+            background: var(--page);
+            color: var(--ink);
+            line-height: 1.58;
+        }
+
+        a {
+            color: inherit;
+        }
+
+        .topbar {
+            position: sticky;
+            top: 0;
+            z-index: 10;
+            background: rgba(244, 247, 242, 0.94);
+            backdrop-filter: blur(12px);
+            border-bottom: 1px solid var(--line);
+        }
+
+        .shell {
+            width: min(1280px, calc(100% - 32px));
+            margin: 0 auto;
+        }
+
+        .topbar-inner {
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 20px;
+            align-items: center;
+            padding: 18px 0;
+        }
+
+        .brand h1 {
+            margin: 0;
+            font-size: 26px;
+            line-height: 1.2;
+            letter-spacing: 0;
+        }
+
+        .brand p {
+            margin: 6px 0 0;
+            color: var(--muted);
+            max-width: 760px;
+        }
+
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(72px, 1fr));
+            gap: 10px;
+        }
+
+        .stat {
+            min-width: 86px;
+            padding: 10px 12px;
+            background: var(--paper);
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            text-align: center;
+            box-shadow: 0 4px 14px rgba(28, 37, 34, 0.04);
+        }
+
+        .stat strong {
+            display: block;
+            font-size: 20px;
+            line-height: 1.1;
+            color: var(--teal);
+        }
+
+        .stat span {
+            display: block;
+            margin-top: 4px;
+            color: var(--muted);
+            font-size: 12px;
+        }
+
+        .controls {
+            margin: 22px 0;
+            display: grid;
+            grid-template-columns: minmax(260px, 1fr) 160px 150px 140px;
+            gap: 12px;
+            align-items: end;
+        }
+
+        .progress-panel {
+            display: none;
+            margin: 22px 0;
+            background: var(--paper);
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            padding: 18px;
+            box-shadow: var(--shadow);
+        }
+
+        .progress-head {
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 14px;
+            align-items: start;
+        }
+
+        .progress-head h2 {
+            margin: 0;
+            font-size: 18px;
+        }
+
+        .progress-head p {
+            margin: 6px 0 0;
+            color: var(--muted);
+        }
+
+        .progress-status {
+            display: inline-flex;
+            align-items: center;
+            min-height: 28px;
+            padding: 3px 10px;
+            border-radius: 999px;
+            border: 1px solid var(--line);
+            background: var(--teal-soft);
+            color: var(--teal);
+            font-size: 13px;
+            font-weight: 700;
+            white-space: nowrap;
+        }
+
+        .progress-meter {
+            margin: 14px 0 16px;
+            height: 12px;
+            background: #edf2ee;
+            border-radius: 999px;
+            overflow: hidden;
+        }
+
+        .progress-meter-fill {
+            height: 100%;
+            width: 0;
+            background: linear-gradient(90deg, var(--teal), var(--amber));
+            transition: width 0.25s ease;
+        }
+
+        .progress-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 14px;
+        }
+
+        .progress-block {
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            padding: 12px;
+            background: #fbfcfa;
+            min-width: 0;
+        }
+
+        .progress-block h3 {
+            margin: 0 0 10px;
+            font-size: 14px;
+        }
+
+        .progress-list {
+            display: grid;
+            gap: 8px;
+        }
+
+        .progress-item {
+            display: grid;
+            gap: 4px;
+            padding: 8px;
+            border-radius: 8px;
+            border: 1px solid #edf2ee;
+            background: var(--paper);
+        }
+
+        .progress-item strong {
+            font-size: 13px;
+            line-height: 1.35;
+        }
+
+        .progress-item span,
+        .progress-item code {
+            color: var(--muted);
+            font-size: 12px;
+        }
+
+        .progress-item code {
+            white-space: normal;
+            overflow-wrap: anywhere;
+            font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+        }
+
+        .field {
+            display: grid;
+            gap: 6px;
+        }
+
+        .field label {
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        input[type="search"],
+        input[type="range"],
+        select {
+            width: 100%;
+        }
+
+        input[type="search"],
+        select {
+            min-height: 42px;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            padding: 0 12px;
+            background: var(--paper);
+            color: var(--ink);
+            font: inherit;
+        }
+
+        input[type="search"]:focus,
+        select:focus {
+            outline: 2px solid var(--teal-soft);
+            border-color: var(--teal);
+        }
+
+        .range-value {
+            color: var(--ink);
+            font-weight: 700;
+        }
+
+        .visuals {
+            display: grid;
+            grid-template-columns: 1.1fr 0.9fr;
+            gap: 16px;
+            margin-bottom: 18px;
+        }
+
+        .panel {
+            background: var(--paper);
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            padding: 18px;
+            box-shadow: var(--shadow);
+        }
+
+        .panel h2 {
+            margin: 0 0 14px;
+            font-size: 17px;
+        }
+
+        .chips {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .chip {
+            border: 1px solid var(--line);
+            background: var(--paper);
+            color: var(--ink);
+            border-radius: 999px;
+            padding: 7px 11px;
+            cursor: pointer;
+            font: inherit;
+            font-size: 13px;
+        }
+
+        .chip.active {
+            background: var(--teal);
+            border-color: var(--teal);
+            color: #ffffff;
+        }
+
+        .bar-row {
+            display: grid;
+            grid-template-columns: 96px 1fr 36px;
+            gap: 10px;
+            align-items: center;
+            margin: 9px 0;
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        .bar-track {
+            height: 10px;
+            background: #edf2ee;
+            border-radius: 999px;
+            overflow: hidden;
+        }
+
+        .bar-fill {
+            height: 100%;
+            width: 0;
+            background: linear-gradient(90deg, var(--teal), var(--amber));
+            border-radius: inherit;
+        }
+
+        .papers {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+            gap: 16px;
+            padding-bottom: 36px;
+        }
+
+        .paper-card {
+            background: var(--paper);
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            padding: 18px;
+            box-shadow: var(--shadow);
+        }
+
+        .paper-card:hover {
+            border-color: rgba(15, 118, 110, 0.45);
+        }
+
+        .paper-head {
+            display: grid;
+            gap: 10px;
+        }
+
+        .paper-title {
+            margin: 0;
+            font-size: 18px;
+            line-height: 1.35;
+            letter-spacing: 0;
+        }
+
+        .paper-title a {
+            text-decoration: none;
+        }
+
+        .paper-title a:hover {
+            color: var(--teal);
+        }
+
+        .meta {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            min-height: 24px;
+            padding: 2px 8px;
+            border-radius: 999px;
+            background: #eef3ef;
+            color: var(--muted);
+            border: 1px solid var(--line);
+        }
+
+        .badge.high {
+            background: var(--green-soft);
+            color: var(--green);
+            border-color: #bde8cd;
+        }
+
+        .badge.medium {
+            background: var(--amber-soft);
+            color: var(--amber);
+            border-color: #ffd18a;
+        }
+
+        .badge.low {
+            background: var(--red-soft);
+            color: var(--red);
+            border-color: #fecdc9;
+        }
+
+        .score-line {
+            display: grid;
+            grid-template-columns: 52px 1fr;
+            gap: 8px;
+            align-items: center;
+            margin: 12px 0;
+        }
+
+        .score-line span {
+            color: var(--teal);
+            font-weight: 700;
+        }
+
+        .score-track {
+            height: 8px;
+            background: #edf2ee;
+            border-radius: 999px;
+            overflow: hidden;
+        }
+
+        .score-fill {
+            height: 100%;
+            background: var(--teal);
+            border-radius: inherit;
+        }
+
+        .section-title {
+            margin: 16px 0 6px;
+            font-size: 13px;
+            color: var(--muted);
+            font-weight: 700;
+        }
+
+        .summary {
+            margin: 0;
+        }
+
+        ul {
+            margin: 6px 0 0;
+            padding-left: 19px;
+        }
+
+        li + li {
+            margin-top: 4px;
+        }
+
+        details {
+            margin-top: 12px;
+            border-top: 1px solid var(--line);
+            padding-top: 10px;
+        }
+
+        summary {
+            cursor: pointer;
+            color: var(--teal);
+            font-weight: 700;
+        }
+
+        .abstract {
+            color: var(--muted);
+            font-size: 14px;
+            margin: 8px 0 0;
+        }
+
+        .actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 14px;
+        }
+
+        .link-button {
+            min-height: 34px;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            padding: 0 10px;
+            text-decoration: none;
+            color: var(--ink);
+            background: #fbfcfa;
+            font-size: 13px;
+        }
+
+        .link-button:hover {
+            border-color: var(--teal);
+            color: var(--teal);
+        }
+
+        .empty,
+        .loading {
+            display: none;
+            background: var(--paper);
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            padding: 28px;
+            text-align: center;
+            color: var(--muted);
+            box-shadow: var(--shadow);
+        }
+
+        @media (max-width: 980px) {
+            .topbar-inner,
+            .visuals,
+            .progress-grid,
+            .controls {
+                grid-template-columns: 1fr;
+            }
+
+            .stats {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+
+        @media (max-width: 520px) {
+            .shell {
+                width: min(100% - 20px, 1280px);
+            }
+
+            .papers {
+                grid-template-columns: 1fr;
+            }
+
+            .bar-row {
+                grid-template-columns: 76px 1fr 28px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <header class="topbar">
+        <div class="shell topbar-inner">
+            <div class="brand">
+                <h1>arXiv 论文雷达</h1>
+                <p id="interestText">正在读取检索结果...</p>
+            </div>
+            <div class="stats">
+                <div class="stat"><strong id="totalCount">0</strong><span>总数</span></div>
+                <div class="stat"><strong id="shownCount">0</strong><span>显示</span></div>
+                <div class="stat"><strong id="avgScore">0</strong><span>均分</span></div>
+                <div class="stat"><strong id="highCount">0</strong><span>高优先级</span></div>
+            </div>
+        </div>
+    </header>
+
+    <main class="shell">
+        <section class="progress-panel" id="progressPanel" aria-label="运行进度">
+            <div class="progress-head">
+                <div>
+                    <h2>运行进度</h2>
+                    <p id="progressMessage">等待任务状态...</p>
+                </div>
+                <span class="progress-status" id="progressStatus">idle</span>
+            </div>
+            <div class="progress-meter">
+                <div class="progress-meter-fill" id="progressFill"></div>
+            </div>
+            <div class="progress-grid">
+                <div class="progress-block">
+                    <h3>检索顺序</h3>
+                    <div class="progress-list" id="searchProgressList"></div>
+                </div>
+                <div class="progress-block">
+                    <h3>分析批次</h3>
+                    <div class="progress-list" id="analysisProgressList"></div>
+                </div>
+            </div>
+        </section>
+
+        <section class="controls" aria-label="筛选控制">
+            <div class="field">
+                <label for="searchInput">搜索</label>
+                <input id="searchInput" type="search" placeholder="标题、摘要、中文总结、创新点">
+            </div>
+            <div class="field">
+                <label for="prioritySelect">优先级</label>
+                <select id="prioritySelect">
+                    <option value="all">全部</option>
+                    <option value="high">High</option>
+                    <option value="medium">Medium</option>
+                    <option value="low">Low</option>
+                </select>
+            </div>
+            <div class="field">
+                <label for="sortSelect">排序</label>
+                <select id="sortSelect">
+                    <option value="score">相关性</option>
+                    <option value="date">发布日期</option>
+                    <option value="title">标题</option>
+                </select>
+            </div>
+            <div class="field">
+                <label for="scoreRange">最低分 <span class="range-value" id="scoreValue">0</span></label>
+                <input id="scoreRange" type="range" min="0" max="100" value="0">
+            </div>
+        </section>
+
+        <section class="visuals" aria-label="数据概览">
+            <div class="panel">
+                <h2>类别分布</h2>
+                <div id="categoryBars"></div>
+            </div>
+            <div class="panel">
+                <h2>主题筛选</h2>
+                <div class="chips" id="topicChips"></div>
+            </div>
+        </section>
+
+        <div class="loading" id="loading">正在加载 arxiv_research_results.json</div>
+        <div class="empty" id="empty">没有匹配当前筛选条件的论文。</div>
+        <section class="papers" id="papers"></section>
+    </main>
+
+    <script>
+        const DATA_FILE = "arxiv_research_results.json";
+        const PROGRESS_FILE = "arxiv_progress.json";
+        let dataset = null;
+        let papers = [];
+        let shown = [];
+        let selectedTopic = "";
+        let progressTimer = null;
+        let lastCompletedProgressAt = "";
+
+        const els = {
+            interestText: document.getElementById("interestText"),
+            totalCount: document.getElementById("totalCount"),
+            shownCount: document.getElementById("shownCount"),
+            avgScore: document.getElementById("avgScore"),
+            highCount: document.getElementById("highCount"),
+            searchInput: document.getElementById("searchInput"),
+            prioritySelect: document.getElementById("prioritySelect"),
+            sortSelect: document.getElementById("sortSelect"),
+            scoreRange: document.getElementById("scoreRange"),
+            scoreValue: document.getElementById("scoreValue"),
+            categoryBars: document.getElementById("categoryBars"),
+            topicChips: document.getElementById("topicChips"),
+            progressPanel: document.getElementById("progressPanel"),
+            progressMessage: document.getElementById("progressMessage"),
+            progressStatus: document.getElementById("progressStatus"),
+            progressFill: document.getElementById("progressFill"),
+            searchProgressList: document.getElementById("searchProgressList"),
+            analysisProgressList: document.getElementById("analysisProgressList"),
+            loading: document.getElementById("loading"),
+            empty: document.getElementById("empty"),
+            papers: document.getElementById("papers")
+        };
+
+        function escapeHtml(value) {
+            return String(value ?? "")
+                .replaceAll("&", "&amp;")
+                .replaceAll("<", "&lt;")
+                .replaceAll(">", "&gt;")
+                .replaceAll('"', "&quot;")
+                .replaceAll("'", "&#039;");
+        }
+
+        function arrayOf(value) {
+            return Array.isArray(value) ? value : (value ? [value] : []);
+        }
+
+        function shortDate(value) {
+            if (!value) return "N/A";
+            const date = new Date(value);
+            if (Number.isNaN(date.getTime())) return value.slice(0, 10);
+            return date.toISOString().slice(0, 10);
+        }
+
+        function priorityLabel(priority) {
+            if (priority === "high") return "High";
+            if (priority === "medium") return "Medium";
+            return "Low";
+        }
+
+        function scoreOf(paper) {
+            return Number(paper.relevance_score ?? paper.heuristic_score ?? 0);
+        }
+
+        function publicationVenueOf(paper) {
+            if (paper.publication_venue) return paper.publication_venue;
+            if (paper.journal_ref) return paper.journal_ref;
+            const comment = paper.comment || "";
+            const accepted = comment.match(/(?:accepted|published|to appear)\s+(?:at|in|to)\s+([^.;,\n]+)/i);
+            if (accepted) return accepted[1].trim();
+            return "";
+        }
+
+        function stageLabel(stage) {
+            const labels = {
+                starting: "准备",
+                optimize: "优化关键词",
+                search: "检索 arXiv",
+                screen: "候选筛选",
+                refine: "扩展检索词",
+                analyze: "LLM 分析",
+                save: "保存结果",
+                done: "完成",
+                interrupted: "已中断"
+            };
+            return labels[stage] || stage || "未知";
+        }
+
+        function calculateProgress(progress) {
+            if (!progress || progress.status === "completed") return 100;
+            if (progress.stage === "optimize") return 8;
+            if (progress.stage === "save") return 96;
+            if (progress.stage === "search") {
+                const queries = arrayOf(progress.search?.queries);
+                const totalLimit = queries.reduce((sum, item) => sum + Number(item.limit || 0), 0) || 1;
+                const fetched = queries.reduce((sum, item) => sum + Math.min(Number(item.fetched || 0), Number(item.limit || 0)), 0);
+                return Math.round(10 + Math.min(1, fetched / totalLimit) * 40);
+            }
+            if (progress.stage === "screen") {
+                const total = Number(progress.screening?.total_papers || 0) || 1;
+                const processed = Number(progress.screening?.processed_papers || 0);
+                return Math.round(52 + Math.min(1, processed / total) * 18);
+            }
+            if (progress.stage === "refine") return 72;
+            if (progress.stage === "analyze") {
+                const total = Number(progress.analysis?.total_papers || 0) || 1;
+                const processed = Number(progress.analysis?.processed_papers || 0);
+                return Math.round(74 + Math.min(1, processed / total) * 20);
+            }
+            return 0;
+        }
+
+        async function loadProgress() {
+            try {
+                const response = await fetch(`${PROGRESS_FILE}?t=${Date.now()}`);
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const progress = await response.json();
+                renderProgress(progress);
+                if (progress.status === "completed" && progress.updated_at !== lastCompletedProgressAt) {
+                    lastCompletedProgressAt = progress.updated_at || "";
+                    await loadData();
+                }
+            } catch (error) {
+                if (!dataset) return;
+                els.progressPanel.style.display = "none";
+            }
+        }
+
+        function renderProgress(progress) {
+            if (!progress) return;
+            els.progressPanel.style.display = "block";
+            const percent = calculateProgress(progress);
+            els.progressFill.style.width = `${percent}%`;
+            els.progressStatus.textContent = `${stageLabel(progress.stage)} · ${progress.status || "running"} · ${percent}%`;
+            els.progressMessage.textContent = progress.message || "任务运行中";
+
+            const queries = arrayOf(progress.search?.queries);
+            els.searchProgressList.innerHTML = queries.length ? queries.map(item => `
+                <div class="progress-item">
+                    <strong>${escapeHtml(item.index)}. ${escapeHtml(item.name || "检索组")} · ${escapeHtml(item.status || "pending")}</strong>
+                    <span>抓取 ${Number(item.fetched || 0)} / ${Number(item.limit || 0)}，arXiv 返回总量 ${Number(item.total || 0)}，去重后 ${Number(item.unique_papers_after_query || 0)}</span>
+                    ${item.arxiv_query ? `<code>${escapeHtml(item.arxiv_query)}</code>` : ""}
+                </div>
+            `).join("") : `<div class="progress-item"><span>还没有生成检索计划。</span></div>`;
+
+            const screeningBatches = arrayOf(progress.screening?.batches);
+            const analysisBatches = arrayOf(progress.analysis?.batches);
+            const batches = progress.stage === "screen" && screeningBatches.length ? screeningBatches : analysisBatches;
+            const batchLabel = progress.stage === "screen" ? "Screen" : "Batch";
+            els.analysisProgressList.innerHTML = batches.length ? batches.map(item => `
+                <div class="progress-item">
+                    <strong>${batchLabel} ${escapeHtml(item.index)} · ${escapeHtml(item.status || "pending")} · ${Number(item.paper_count || 0)} 篇</strong>
+                    <span>${arrayOf(item.titles).slice(0, 3).map(escapeHtml).join(" / ")}</span>
+                </div>
+            `).join("") : `<div class="progress-item"><span>检索完成后会显示筛选和 LLM 分析批次。</span></div>`;
+        }
+
+        async function loadData() {
+            els.loading.style.display = "block";
+            try {
+                const response = await fetch(`${DATA_FILE}?t=${Date.now()}`);
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                dataset = await response.json();
+                papers = arrayOf(dataset.papers);
+                const metadata = dataset.metadata || {};
+                els.interestText.textContent = metadata.user_interest || "arXiv 检索结果";
+                buildTopicChips();
+                applyFilters();
+            } catch (error) {
+                els.loading.textContent = `读取失败：${error.message}`;
+            }
+        }
+
+        function buildTopicChips() {
+            const counts = new Map();
+            papers.forEach(paper => {
+                arrayOf(paper.matched_topics).forEach(topic => {
+                    if (!topic) return;
+                    counts.set(topic, (counts.get(topic) || 0) + 1);
+                });
+                arrayOf(paper.categories).forEach(category => {
+                    if (!category) return;
+                    counts.set(category, (counts.get(category) || 0) + 1);
+                });
+            });
+
+            const chips = [...counts.entries()]
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, 24)
+                .map(([topic, count]) => `<button class="chip" data-topic="${escapeHtml(topic)}">${escapeHtml(topic)} · ${count}</button>`)
+                .join("");
+            els.topicChips.innerHTML = `<button class="chip active" data-topic="">全部</button>${chips}`;
+        }
+
+        function applyFilters() {
+            const term = els.searchInput.value.trim().toLowerCase();
+            const priority = els.prioritySelect.value;
+            const minScore = Number(els.scoreRange.value);
+
+            shown = papers.filter(paper => {
+                const score = scoreOf(paper);
+                const priorityOk = priority === "all" || (paper.priority || "low") === priority;
+                const scoreOk = score >= minScore;
+                const topicOk = !selectedTopic ||
+                    arrayOf(paper.matched_topics).includes(selectedTopic) ||
+                    arrayOf(paper.categories).includes(selectedTopic);
+                const haystack = [
+                    paper.title,
+                    paper.abstract,
+                    paper.summary_cn,
+                    paper.why_relevant_cn,
+                    publicationVenueOf(paper),
+                    arrayOf(paper.key_points_cn).join(" "),
+                    arrayOf(paper.innovation_ideas_cn).join(" "),
+                    arrayOf(paper.categories).join(" "),
+                    arrayOf(paper.matched_topics).join(" ")
+                ].join(" ").toLowerCase();
+                const searchOk = !term || haystack.includes(term);
+                return priorityOk && scoreOk && topicOk && searchOk;
+            });
+
+            if (els.sortSelect.value === "date") {
+                shown.sort((a, b) => String(b.published || "").localeCompare(String(a.published || "")));
+            } else if (els.sortSelect.value === "title") {
+                shown.sort((a, b) => String(a.title || "").localeCompare(String(b.title || "")));
+            } else {
+                shown.sort((a, b) => scoreOf(b) - scoreOf(a));
+            }
+
+            render();
+        }
+
+        function renderStats() {
+            const avg = shown.length ? Math.round(shown.reduce((sum, paper) => sum + scoreOf(paper), 0) / shown.length) : 0;
+            els.totalCount.textContent = papers.length;
+            els.shownCount.textContent = shown.length;
+            els.avgScore.textContent = avg;
+            els.highCount.textContent = shown.filter(paper => paper.priority === "high").length;
+        }
+
+        function renderCategoryBars() {
+            const counts = new Map();
+            shown.forEach(paper => {
+                const category = paper.primary_category || arrayOf(paper.categories)[0] || "N/A";
+                counts.set(category, (counts.get(category) || 0) + 1);
+            });
+            const rows = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8);
+            const max = rows.length ? rows[0][1] : 1;
+            els.categoryBars.innerHTML = rows.map(([category, count]) => `
+                <div class="bar-row">
+                    <span>${escapeHtml(category)}</span>
+                    <div class="bar-track"><div class="bar-fill" style="width:${Math.round(count / max * 100)}%"></div></div>
+                    <strong>${count}</strong>
+                </div>
+            `).join("") || `<div class="bar-row"><span>N/A</span><div class="bar-track"></div><strong>0</strong></div>`;
+        }
+
+        function renderPapers() {
+            els.loading.style.display = "none";
+            els.empty.style.display = shown.length ? "none" : "block";
+            els.papers.innerHTML = shown.map(paper => {
+                const score = scoreOf(paper);
+                const priority = paper.priority || "low";
+                const categories = arrayOf(paper.categories).slice(0, 4);
+                const topics = arrayOf(paper.matched_topics).slice(0, 5);
+                const keyPoints = arrayOf(paper.key_points_cn);
+                const ideas = arrayOf(paper.innovation_ideas_cn);
+                const limits = arrayOf(paper.limitations_cn);
+                const venue = publicationVenueOf(paper);
+                const absLink = paper.links?.abs || `https://arxiv.org/abs/${paper.arxiv_id || ""}`;
+                const pdfLink = paper.links?.pdf || "";
+
+                return `
+                    <article class="paper-card">
+                        <div class="paper-head">
+                            <h2 class="paper-title"><a href="${escapeHtml(absLink)}" target="_blank" rel="noopener">${escapeHtml(paper.title || "Untitled")}</a></h2>
+                            <div class="meta">
+                                <span class="badge ${priority}">${priorityLabel(priority)}</span>
+                                <span class="badge">${escapeHtml(shortDate(paper.published))}</span>
+                                <span class="badge">发表来源：${escapeHtml(venue)}</span>
+                                ${categories.map(category => `<span class="badge">${escapeHtml(category)}</span>`).join("")}
+                            </div>
+                        </div>
+                        <div class="score-line">
+                            <span>${score}</span>
+                            <div class="score-track"><div class="score-fill" style="width:${Math.max(0, Math.min(100, score))}%"></div></div>
+                        </div>
+
+                        <div class="section-title">中文总结</div>
+                        <p class="summary">${escapeHtml(paper.summary_cn || "暂无中文总结。")}</p>
+
+                        <div class="section-title">发表期刊/会议</div>
+                        <p class="summary">${escapeHtml(venue)}</p>
+
+                        ${keyPoints.length ? `<div class="section-title">关键要点</div><ul>${keyPoints.map(item => `<li>${escapeHtml(item)}</li>`).join("")}</ul>` : ""}
+                        ${ideas.length ? `<div class="section-title">可参考创新点</div><ul>${ideas.map(item => `<li>${escapeHtml(item)}</li>`).join("")}</ul>` : ""}
+                        ${paper.why_relevant_cn ? `<div class="section-title">相关性判断</div><p class="summary">${escapeHtml(paper.why_relevant_cn)}</p>` : ""}
+                        ${limits.length ? `<div class="section-title">待确认点</div><ul>${limits.map(item => `<li>${escapeHtml(item)}</li>`).join("")}</ul>` : ""}
+                        ${topics.length ? `<div class="section-title">匹配主题</div><div class="chips">${topics.map(topic => `<span class="badge">${escapeHtml(topic)}</span>`).join("")}</div>` : ""}
+
+                        <details>
+                            <summary>原始摘要</summary>
+                            <p class="abstract">${escapeHtml(paper.abstract || "No abstract")}</p>
+                        </details>
+
+                        <div class="actions">
+                            <a class="link-button" href="${escapeHtml(absLink)}" target="_blank" rel="noopener">arXiv</a>
+                            ${pdfLink ? `<a class="link-button" href="${escapeHtml(pdfLink)}" target="_blank" rel="noopener">PDF</a>` : ""}
+                        </div>
+                    </article>
+                `;
+            }).join("");
+        }
+
+        function render() {
+            renderStats();
+            renderCategoryBars();
+            renderPapers();
+        }
+
+        els.searchInput.addEventListener("input", applyFilters);
+        els.prioritySelect.addEventListener("change", applyFilters);
+        els.sortSelect.addEventListener("change", applyFilters);
+        els.scoreRange.addEventListener("input", () => {
+            els.scoreValue.textContent = els.scoreRange.value;
+            applyFilters();
+        });
+        els.topicChips.addEventListener("click", event => {
+            const target = event.target.closest(".chip");
+            if (!target) return;
+            selectedTopic = target.dataset.topic || "";
+            els.topicChips.querySelectorAll(".chip").forEach(chip => chip.classList.remove("active"));
+            target.classList.add("active");
+            applyFilters();
+        });
+
+        loadData();
+        loadProgress();
+        progressTimer = setInterval(loadProgress, 2000);
+    </script>
+</body>
+</html>

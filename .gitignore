@@ -1,0 +1,24 @@
+# LLM/API secrets
+.env
+.env.*
+
+# Runtime JSON outputs
+arxiv_progress.json
+arxiv_progress.json.tmp
+arxiv_raw_papers.json
+arxiv_research_results.json
+
+# Local server logs
+server*.log
+*.log
+
+# Python cache
+__pycache__/
+code/__pycache__/
+*.py[cod]
+
+# Local OS/editor files
+.DS_Store
+Thumbs.db
+*.tmp
+*.bak
