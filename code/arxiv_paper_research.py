@@ -10,9 +10,9 @@ Pipeline:
    innovation ideas.
 4. Save a JSON file that can be rendered by arxiv_papers_viewer.html.
 
-The LLM client uses OpenAI-compatible Chat Completions endpoints. It works with
-providers such as DeepSeek or OpenAI when the corresponding base URL/model/key
-are supplied through environment variables or CLI arguments.
+The LLM client uses Chat Completions-compatible endpoints when the corresponding
+base URL, model, and key are supplied through environment variables or CLI
+arguments.
 """
 
 from __future__ import annotations
@@ -41,6 +41,36 @@ ATOM_NS = {
 DEFAULT_MAX_RESULTS = 30
 DEFAULT_REQUEST_DELAY = 3.0
 DEFAULT_MIN_PER_QUERY = 50
+
+
+def load_env_file(path: Path) -> None:
+    """Load simple KEY=VALUE entries from a local .env file if present."""
+    if not path.exists():
+        return
+
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export ") :].strip()
+        if line.startswith("$env:"):
+            line = line[len("$env:") :].strip()
+        if "=" not in line:
+            continue
+
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", key):
+            continue
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1]
+        os.environ.setdefault(key, value)
+
+
+def load_project_env() -> None:
+    load_env_file(default_output_path(".env"))
 
 
 def resolve_candidate_results(args: argparse.Namespace) -> int:
@@ -244,50 +274,11 @@ class LLMClient:
 
     @classmethod
     def from_args(cls, args: argparse.Namespace) -> Optional["LLMClient"]:
-        api_key = (
-            args.api_key
-            or os.getenv("LLM_API_KEY")
-            or os.getenv("ZAI_API_KEY")
-            or os.getenv("BIGMODEL_API_KEY")
-            or os.getenv("ZHIPUAI_API_KEY")
-            or os.getenv("GLM_API_KEY")
-            or os.getenv("DEEPSEEK_API_KEY")
-            or os.getenv("OPENAI_API_KEY")
-        )
-        if not api_key:
+        api_key = args.api_key or os.getenv("LLM_API_KEY")
+        api_url = args.api_url or os.getenv("LLM_API_URL")
+        model = args.model or os.getenv("LLM_MODEL")
+        if not api_key or not api_url or not model:
             return None
-
-        api_url = (
-            args.api_url
-            or os.getenv("LLM_API_URL")
-            or os.getenv("ZAI_API_URL")
-            or os.getenv("BIGMODEL_API_URL")
-            or os.getenv("GLM_API_URL")
-            or os.getenv("OPENAI_BASE_URL")
-            or ("https://open.bigmodel.cn/api/paas/v4" if (
-                os.getenv("ZAI_API_KEY")
-                or os.getenv("BIGMODEL_API_KEY")
-                or os.getenv("ZHIPUAI_API_KEY")
-                or os.getenv("GLM_API_KEY")
-            ) else None)
-            or ("https://api.deepseek.com/v1" if os.getenv("DEEPSEEK_API_KEY") else "https://api.openai.com/v1")
-        )
-        model = (
-            args.model
-            or os.getenv("LLM_MODEL")
-            or os.getenv("ZAI_MODEL")
-            or os.getenv("BIGMODEL_MODEL")
-            or os.getenv("GLM_MODEL")
-            or (
-                "glm-5.1" if (
-                    os.getenv("ZAI_API_KEY")
-                    or os.getenv("BIGMODEL_API_KEY")
-                    or os.getenv("ZHIPUAI_API_KEY")
-                    or os.getenv("GLM_API_KEY")
-                ) else None
-            )
-            or ("deepseek-chat" if os.getenv("DEEPSEEK_API_KEY") else "gpt-4o-mini")
-        )
         return cls(api_url=api_url, api_key=api_key, model=model, timeout=args.llm_timeout)
 
     def chat(
@@ -355,57 +346,7 @@ class LLMClient:
 
 
 def fallback_search_plan(interest: str, categories: Optional[List[str]] = None) -> Dict[str, Any]:
-    text = interest.lower()
     mapped_terms: List[str] = []
-    theme_specs = [
-        (
-            ["视觉slam", "slam", "定位", "建图"],
-            "视觉 SLAM / 视觉里程计",
-            ["visual SLAM", "visual odometry", "camera localization", "simultaneous localization and mapping"],
-        ),
-        (
-            ["3dgs", "gaussian", "高斯", "splatting"],
-            "3DGS 地图表示与 SLAM",
-            ["3D Gaussian Splatting", "Gaussian Splatting SLAM", "3DGS SLAM", "dense visual SLAM"],
-        ),
-        (
-            ["mesh", "具身", "视频", "图片", "场景生成", "三维重建", "3d"],
-            "图像/视频到 3D 场景",
-            [
-                "image to 3D",
-                "video to 3D",
-                "3D reconstruction",
-                "mesh reconstruction",
-                "scene generation",
-                "embodied AI",
-            ],
-        ),
-        (
-            ["动态", "人体姿势", "人体姿态", "pose", "motion"],
-            "动态物体与人体姿态",
-            [
-                "dynamic scene reconstruction",
-                "dynamic object reconstruction",
-                "human pose estimation",
-                "human motion estimation",
-                "video motion estimation",
-            ],
-        ),
-    ]
-
-    search_queries = []
-    for triggers, name, terms in theme_specs:
-        if any(trigger in text for trigger in triggers):
-            mapped_terms.extend(terms)
-            search_queries.append(
-                {
-                    "name_cn": name,
-                    "terms": terms,
-                    "required_terms": [],
-                    "notes_cn": "未配置 LLM 时按内置主题映射生成。",
-                }
-            )
-
     rough_terms = re.split(r"[,，;；、\n]+", interest)
     mapped_terms.extend([clean_text(item) for item in rough_terms if clean_text(item)])
 
@@ -414,15 +355,14 @@ def fallback_search_plan(interest: str, categories: Optional[List[str]] = None) 
     if not deduped_terms:
         deduped_terms = [interest]
 
-    if not search_queries:
-        search_queries = [
-            {
-                "name_cn": "用户原始兴趣的宽搜版本",
-                "terms": deduped_terms[:8],
-                "required_terms": [],
-                "notes_cn": "未配置 LLM 时生成的保守搜索词。",
-            }
-        ]
+    search_queries = [
+        {
+            "name_cn": "用户原始兴趣的宽搜版本",
+            "terms": deduped_terms[:8],
+            "required_terms": [],
+            "notes_cn": "未配置 LLM 时直接使用用户输入生成保守搜索词。",
+        }
+    ]
 
     return {
         "search_intent_cn": interest,
@@ -430,7 +370,7 @@ def fallback_search_plan(interest: str, categories: Optional[List[str]] = None) 
         "positive_keywords": deduped_terms,
         "negative_keywords": [],
         "categories": categories or [],
-        "rationale_cn": "未配置 LLM，使用内置关键词映射和用户原始输入生成搜索计划。",
+        "rationale_cn": "未配置 LLM，直接使用用户原始输入生成搜索计划。",
         "source": "fallback",
     }
 
@@ -473,7 +413,7 @@ def optimize_search_plan(
     }}
   ],
   "positive_keywords": ["用于本地相关性打分的中英文关键词"],
-  "negative_keywords": ["明显不想要方向的关键词，比如 lidar、survey、navigation 等，如果用户没有排除项可以少填"],
+  "negative_keywords": ["用户明确排除或明显无关的关键词；如果没有排除项可以少填"],
   "categories": ["推荐 arXiv 类别，例如 cs.CV, cs.RO, cs.AI, eess.SY；不确定可留空"],
   "rationale_cn": "简短说明你如何修正了用户输入"
 }}
@@ -982,10 +922,10 @@ def score_screen_batch(
 
 打分规则：
 - 90-100：直接命中用户主题，值得优先读。
-- 70-89：强相关，但可能缺少 3DGS 或 occupancy 中的一个关键元素。
+- 70-89：强相关，但可能只覆盖用户目标中的部分关键条件。
 - 40-69：弱相关或背景相关。
 - 0-39：明显偏离。
-- 如果是 survey、纯 SLAM、纯 navigation、LiDAR-only 且不涉及用户主题，降低分数。
+- 如果论文命中用户明确排除的方向，或只包含宽泛背景而不涉及核心主题，降低分数。
 """.strip(),
         },
     ]
@@ -1309,7 +1249,7 @@ def build_refined_search_plan(
 
 约束：
 - 最多 3 组 search_queries，每组 terms 最多 8 个。
-- 要尽量补充同义词、任务名、数据表示名、自动驾驶常用表达，例如 occupancy prediction、occupancy forecasting、occupancy scene completion、semantic occupancy、BEV occupancy、Gaussian Splatting、3DGS、scene reconstruction。
+- 要尽量补充同义词、任务名、方法名、数据集名、应用场景和常见缩写。
 - 避免只重复上一轮完全相同的 query。
 """.strip(),
         },
@@ -1542,7 +1482,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--refine-rounds", type=int, default=0, help="迭代扩展检索轮数；0 表示只按初始 query 检索。")
     parser.add_argument("--refine-seed-size", type=int, default=20, help="每轮用多少篇高相关候选论文提炼下一轮检索词。")
     parser.add_argument("--no-llm", action="store_true", help="不调用 LLM，只抓 arXiv 并做关键词初筛。")
-    parser.add_argument("--api-url", default=None, help="OpenAI-compatible base URL，例如 https://api.deepseek.com/v1")
+    parser.add_argument("--api-url", default=None, help="Chat Completions-compatible base URL，例如 https://api.example.com/v1")
     parser.add_argument("--api-key", default=None, help="LLM API key；更推荐用环境变量。")
     parser.add_argument("--model", default=None, help="LLM 模型名。")
     parser.add_argument("--llm-timeout", type=int, default=90, help="LLM 请求超时时间。")
@@ -1553,6 +1493,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
+    load_project_env()
     args = parse_args()
     if args.max_results <= 0:
         raise ValueError("--max-results must be positive.")
