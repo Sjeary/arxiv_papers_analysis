@@ -173,15 +173,48 @@ def save_json(path: Path, data: Dict[str, Any]) -> None:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 
-def extract_json_from_text(text: str) -> Any:
+def content_to_text(content: Any) -> str:
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = [content_to_text(item) for item in content]
+        return "\n".join(part for part in parts if part)
+    if isinstance(content, dict):
+        if "text" in content:
+            return content_to_text(content.get("text"))
+        if "content" in content:
+            return content_to_text(content.get("content"))
+        if "output_text" in content:
+            return content_to_text(content.get("output_text"))
+        if content.get("type") == "text" and "text" in content:
+            return content_to_text(content.get("text"))
+        return json.dumps(content, ensure_ascii=False)
+    return str(content)
+
+
+def shorten_text(text: str, limit: int = 500) -> str:
+    text = clean_text(text)
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3] + "..."
+
+
+def extract_json_from_text(text: Any) -> Any:
     """Parse JSON from a model response that may contain Markdown fences."""
-    response = text.strip()
+    response = content_to_text(text).strip()
     fence_match = re.search(r"```(?:json)?\s*(.*?)```", response, re.DOTALL | re.IGNORECASE)
     if fence_match:
         response = fence_match.group(1).strip()
 
     try:
-        return json.loads(response)
+        parsed = json.loads(response)
+        if isinstance(parsed, dict):
+            for key in ("data", "result", "results", "papers", "items", "outputs"):
+                if key in parsed and isinstance(parsed[key], (list, dict)):
+                    return parsed[key]
+        return parsed
     except json.JSONDecodeError:
         pass
 
@@ -214,6 +247,10 @@ class LLMClient:
         api_key = (
             args.api_key
             or os.getenv("LLM_API_KEY")
+            or os.getenv("ZAI_API_KEY")
+            or os.getenv("BIGMODEL_API_KEY")
+            or os.getenv("ZHIPUAI_API_KEY")
+            or os.getenv("GLM_API_KEY")
             or os.getenv("DEEPSEEK_API_KEY")
             or os.getenv("OPENAI_API_KEY")
         )
@@ -223,11 +260,33 @@ class LLMClient:
         api_url = (
             args.api_url
             or os.getenv("LLM_API_URL")
+            or os.getenv("ZAI_API_URL")
+            or os.getenv("BIGMODEL_API_URL")
+            or os.getenv("GLM_API_URL")
             or os.getenv("OPENAI_BASE_URL")
+            or ("https://open.bigmodel.cn/api/paas/v4" if (
+                os.getenv("ZAI_API_KEY")
+                or os.getenv("BIGMODEL_API_KEY")
+                or os.getenv("ZHIPUAI_API_KEY")
+                or os.getenv("GLM_API_KEY")
+            ) else None)
             or ("https://api.deepseek.com/v1" if os.getenv("DEEPSEEK_API_KEY") else "https://api.openai.com/v1")
         )
-        model = args.model or os.getenv("LLM_MODEL") or (
-            "deepseek-chat" if os.getenv("DEEPSEEK_API_KEY") else "gpt-4o-mini"
+        model = (
+            args.model
+            or os.getenv("LLM_MODEL")
+            or os.getenv("ZAI_MODEL")
+            or os.getenv("BIGMODEL_MODEL")
+            or os.getenv("GLM_MODEL")
+            or (
+                "glm-5.1" if (
+                    os.getenv("ZAI_API_KEY")
+                    or os.getenv("BIGMODEL_API_KEY")
+                    or os.getenv("ZHIPUAI_API_KEY")
+                    or os.getenv("GLM_API_KEY")
+                ) else None
+            )
+            or ("deepseek-chat" if os.getenv("DEEPSEEK_API_KEY") else "gpt-4o-mini")
         )
         return cls(api_url=api_url, api_key=api_key, model=model, timeout=args.llm_timeout)
 
@@ -241,9 +300,10 @@ class LLMClient:
         payload = {
             "model": self.model,
             "messages": messages,
-            "temperature": temperature,
             "max_tokens": max_tokens,
         }
+        if temperature is not None:
+            payload["temperature"] = temperature
         data = json.dumps(payload).encode("utf-8")
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -256,8 +316,35 @@ class LLMClient:
             try:
                 with urllib.request.urlopen(request, timeout=self.timeout) as response:
                     result = json.loads(response.read().decode("utf-8"))
-                return result["choices"][0]["message"]["content"]
-            except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, KeyError, json.JSONDecodeError) as exc:
+                choice = result["choices"][0]
+                message = choice.get("message", {})
+                content = message.get("content")
+                if content is None and "text" in choice:
+                    content = choice.get("text")
+                if content is None:
+                    raise KeyError("message.content")
+                return content_to_text(content)
+            except urllib.error.HTTPError as exc:
+                body = ""
+                try:
+                    body = exc.read().decode("utf-8", errors="ignore")
+                except Exception:
+                    body = ""
+                detail = body
+                try:
+                    error_json = json.loads(body) if body else {}
+                    if isinstance(error_json, dict):
+                        error_obj = error_json.get("error", error_json)
+                        if isinstance(error_obj, dict):
+                            detail = error_obj.get("message") or error_obj.get("msg") or body
+                except json.JSONDecodeError:
+                    detail = body or str(exc)
+                last_error = RuntimeError(f"HTTP {exc.code} {exc.reason}: {shorten_text(detail, 800)}")
+                wait_seconds = min(20, 2 ** attempt)
+                print(f"LLM call failed on attempt {attempt + 1}/{retries}: {last_error}")
+                if attempt < retries - 1:
+                    time.sleep(wait_seconds)
+            except (urllib.error.URLError, TimeoutError, KeyError, json.JSONDecodeError, TypeError, ValueError) as exc:
                 last_error = exc
                 wait_seconds = min(20, 2 ** attempt)
                 print(f"LLM call failed on attempt {attempt + 1}/{retries}: {exc}")
@@ -836,6 +923,151 @@ def fallback_analysis(papers: List[Dict[str, Any]], plan: Dict[str, Any]) -> Lis
     return analyzed
 
 
+def split_batch_in_half(items: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    middle = max(1, len(items) // 2)
+    return items[:middle], items[middle:]
+
+
+def score_screen_batch(
+    batch: List[Dict[str, Any]],
+    plan: Dict[str, Any],
+    interest: str,
+    llm: LLMClient,
+    max_tokens: int = 5000,
+) -> List[Dict[str, Any]]:
+    compact_papers = [
+        {
+            "arxiv_id": paper.get("arxiv_id"),
+            "title": paper.get("title"),
+            "abstract": paper.get("abstract"),
+            "categories": paper.get("categories"),
+            "published": paper.get("published"),
+            "publication_venue": paper.get("publication_venue"),
+            "journal_ref": paper.get("journal_ref"),
+            "comment": paper.get("comment"),
+            "heuristic_score": paper.get("heuristic_score"),
+        }
+        for paper in batch
+    ]
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "你是论文检索筛选助手。请只做相关性打分和简短理由，不要做详细总结。"
+                "只输出 JSON array，不要输出 Markdown。"
+            ),
+        },
+        {
+            "role": "user",
+            "content": f"""
+用户真正想找的工作：
+{interest}
+
+检索计划：
+{json.dumps(plan, ensure_ascii=False, indent=2)}
+
+候选论文：
+{json.dumps(compact_papers, ensure_ascii=False, indent=2)}
+
+请为每篇论文返回一个 JSON object，数组长度必须等于候选论文数量：
+[
+  {{
+    "arxiv_id": "必须与输入一致",
+    "screen_score": 0,
+    "screen_reason_cn": "一句话说明为什么相关或不相关",
+    "matched_topics": ["匹配主题词"],
+    "should_keep": true
+  }}
+]
+
+打分规则：
+- 90-100：直接命中用户主题，值得优先读。
+- 70-89：强相关，但可能缺少 3DGS 或 occupancy 中的一个关键元素。
+- 40-69：弱相关或背景相关。
+- 0-39：明显偏离。
+- 如果是 survey、纯 SLAM、纯 navigation、LiDAR-only 且不涉及用户主题，降低分数。
+""".strip(),
+        },
+    ]
+
+    response = llm.chat(messages, temperature=0.1, max_tokens=max_tokens)
+    parsed = extract_json_from_text(response)
+    if not isinstance(parsed, list):
+        raise ValueError(f"Screening response is not a JSON array: {shorten_text(content_to_text(response), 400)}")
+    return [item for item in parsed if isinstance(item, dict)]
+
+
+def analyze_summary_batch(
+    batch: List[Dict[str, Any]],
+    plan: Dict[str, Any],
+    interest: str,
+    llm: LLMClient,
+    max_tokens: int = 5000,
+) -> List[Dict[str, Any]]:
+    compact_papers = [
+        {
+            "arxiv_id": paper.get("arxiv_id"),
+            "title": paper.get("title"),
+            "abstract": paper.get("abstract"),
+            "categories": paper.get("categories"),
+            "published": paper.get("published"),
+            "publication_venue": paper.get("publication_venue"),
+            "journal_ref": paper.get("journal_ref"),
+            "comment": paper.get("comment"),
+            "heuristic_score": paper.get("heuristic_score"),
+        }
+        for paper in batch
+    ]
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "你是科研论文阅读助手。请根据用户研究兴趣，用中文总结 arXiv 论文的核心贡献、"
+                "关键要点和可借鉴创新点。只输出 JSON array，不要输出 Markdown。"
+            ),
+        },
+        {
+            "role": "user",
+            "content": f"""
+用户研究兴趣：
+{interest}
+
+LLM 优化后的检索计划：
+{json.dumps(plan, ensure_ascii=False, indent=2)}
+
+待分析论文：
+{json.dumps(compact_papers, ensure_ascii=False, indent=2)}
+
+请为每篇论文返回一个 JSON object，数组长度必须等于论文数量。schema：
+[
+  {{
+    "arxiv_id": "必须和输入一致",
+    "relevance_score": 0,
+    "priority": "high | medium | low",
+    "summary_cn": "用中文 2-4 句话总结论文做了什么",
+    "key_points_cn": ["关键要点1", "关键要点2", "关键要点3"],
+    "innovation_ideas_cn": ["这个工作可供用户参考的创新点/可迁移启发1", "启发2"],
+    "why_relevant_cn": "说明它和用户兴趣的关系，如果不相关也直接说清楚",
+    "limitations_cn": ["从摘要中能看出的局限或需要进一步查全文确认的点"],
+    "matched_topics": ["匹配到的主题词"]
+  }}
+]
+
+要求：
+- relevance_score 根据用户兴趣打 0-100 分，不要全部高分。
+- 不要编造摘要里没有的信息。
+- innovation_ideas_cn 要写成用户可以参考的研究启发，而不是泛泛夸奖。
+- 如果论文不相关，也要保留条目并给低分，方便后续网页筛选。
+""".strip(),
+        },
+    ]
+    response = llm.chat(messages, temperature=0.1, max_tokens=max_tokens)
+    parsed = extract_json_from_text(response)
+    if not isinstance(parsed, list):
+        raise ValueError(f"Analysis response is not a JSON array: {shorten_text(content_to_text(response), 400)}")
+    return [item for item in parsed if isinstance(item, dict)]
+
+
 def screen_candidates_with_llm(
     papers: List[Dict[str, Any]],
     plan: Dict[str, Any],
@@ -918,20 +1150,6 @@ def screen_candidates_with_llm(
         )
 
     for batch_idx, batch in enumerate(batched(papers, batch_size), start=1):
-        compact_papers = [
-            {
-                "arxiv_id": paper.get("arxiv_id"),
-                "title": paper.get("title"),
-                "abstract": paper.get("abstract"),
-                "categories": paper.get("categories"),
-                "published": paper.get("published"),
-                "publication_venue": paper.get("publication_venue"),
-                "journal_ref": paper.get("journal_ref"),
-                "comment": paper.get("comment"),
-                "heuristic_score": paper.get("heuristic_score"),
-            }
-            for paper in batch
-        ]
         batch_progress[batch_idx - 1]["status"] = "running"
         if progress is not None:
             progress.patch(
@@ -944,67 +1162,45 @@ def screen_candidates_with_llm(
                 },
             )
 
-        messages = [
-            {
-                "role": "system",
-                "content": (
-                    "你是论文检索筛选助手。请只做相关性打分和简短理由，不要做详细总结。"
-                    "只输出 JSON array，不要输出 Markdown。"
-                ),
-            },
-            {
-                "role": "user",
-                "content": f"""
-用户真正想找的工作：
-{interest}
-
-检索计划：
-{json.dumps(plan, ensure_ascii=False, indent=2)}
-
-候选论文：
-{json.dumps(compact_papers, ensure_ascii=False, indent=2)}
-
-请为每篇论文返回一个 JSON object，数组长度必须等于候选论文数量：
-[
-  {{
-    "arxiv_id": "必须与输入一致",
-    "screen_score": 0,
-    "screen_reason_cn": "一句话说明为什么相关或不相关",
-    "matched_topics": ["匹配主题词"],
-    "should_keep": true
-  }}
-]
-
-打分规则：
-- 90-100：直接命中用户主题，值得优先读。
-- 70-89：强相关，但可能缺少 3DGS 或 occupancy 中的一个关键元素。
-- 40-69：弱相关或背景相关。
-- 0-39：明显偏离。
-- 如果是 survey、纯 SLAM、纯 navigation、LiDAR-only 且不涉及用户主题，降低分数。
-""".strip(),
-            },
-        ]
-
         try:
-            response = llm.chat(messages, temperature=0.1, max_tokens=5000)
-            parsed = extract_json_from_text(response)
-            if not isinstance(parsed, list):
-                raise ValueError("Screening response is not a JSON array.")
+            parsed = score_screen_batch(batch, plan, interest, llm, max_tokens=5000)
             for item in parsed:
                 if isinstance(item, dict) and item.get("arxiv_id"):
                     scored_by_id[str(item["arxiv_id"])] = item
             batch_progress[batch_idx - 1]["status"] = "completed"
         except Exception as exc:
-            print(f"LLM screening failed for batch {batch_idx}, using heuristic scores: {exc}")
-            for paper in batch:
+            print(f"LLM screening failed for batch {batch_idx} ({len(batch)} papers): {exc}")
+            if len(batch) > 1:
+                left_batch, right_batch = split_batch_in_half(batch)
+                print(f"Retrying screening batch {batch_idx} by splitting into {len(left_batch)} + {len(right_batch)} papers.")
+                try:
+                    for sub_batch in (left_batch, right_batch):
+                        parsed = score_screen_batch(sub_batch, plan, interest, llm, max_tokens=3000)
+                        for item in parsed:
+                            if isinstance(item, dict) and item.get("arxiv_id"):
+                                scored_by_id[str(item["arxiv_id"])] = item
+                    batch_progress[batch_idx - 1]["status"] = "split"
+                except Exception as split_exc:
+                    print(f"Split retry also failed for screening batch {batch_idx}: {split_exc}")
+                    for paper in batch:
+                        scored_by_id[str(paper.get("arxiv_id", paper.get("title", "")))] = {
+                            "arxiv_id": paper.get("arxiv_id"),
+                            "screen_score": paper.get("heuristic_score", 0),
+                            "screen_reason_cn": f"LLM 轻量筛选失败，使用关键词初筛分数。错误：{shorten_text(str(split_exc), 180)}",
+                            "matched_topics": [],
+                            "should_keep": True,
+                        }
+                    batch_progress[batch_idx - 1]["status"] = "fallback"
+            else:
+                paper = batch[0]
                 scored_by_id[str(paper.get("arxiv_id", paper.get("title", "")))] = {
                     "arxiv_id": paper.get("arxiv_id"),
                     "screen_score": paper.get("heuristic_score", 0),
-                    "screen_reason_cn": "LLM 轻量筛选失败，使用关键词初筛分数。",
+                    "screen_reason_cn": f"LLM 轻量筛选失败，使用关键词初筛分数。错误：{shorten_text(str(exc), 180)}",
                     "matched_topics": [],
                     "should_keep": True,
                 }
-            batch_progress[batch_idx - 1]["status"] = "fallback"
+                batch_progress[batch_idx - 1]["status"] = "fallback"
 
         if progress is not None:
             progress.patch(
@@ -1192,20 +1388,6 @@ def analyze_papers_with_llm(
         )
 
     for batch_idx, batch in enumerate(batched(papers, batch_size), start=1):
-        compact_papers = [
-            {
-                "arxiv_id": paper.get("arxiv_id"),
-                "title": paper.get("title"),
-                "abstract": paper.get("abstract"),
-                "categories": paper.get("categories"),
-                "published": paper.get("published"),
-                "publication_venue": paper.get("publication_venue"),
-                "journal_ref": paper.get("journal_ref"),
-                "comment": paper.get("comment"),
-                "heuristic_score": paper.get("heuristic_score"),
-            }
-            for paper in batch
-        ]
         batch_progress[batch_idx - 1]["status"] = "running"
         if progress is not None:
             progress.patch(
@@ -1217,64 +1399,40 @@ def analyze_papers_with_llm(
                     "batches": batch_progress,
                 },
             )
-        messages = [
-            {
-                "role": "system",
-                "content": (
-                    "你是科研论文阅读助手。请根据用户研究兴趣，用中文总结 arXiv 论文的核心贡献、"
-                    "关键要点和可借鉴创新点。只输出 JSON array，不要输出 Markdown。"
-                ),
-            },
-            {
-                "role": "user",
-                "content": f"""
-用户研究兴趣：
-{interest}
-
-LLM 优化后的检索计划：
-{json.dumps(plan, ensure_ascii=False, indent=2)}
-
-待分析论文：
-{json.dumps(compact_papers, ensure_ascii=False, indent=2)}
-
-请为每篇论文返回一个 JSON object，数组长度必须等于论文数量。schema：
-[
-  {{
-    "arxiv_id": "必须和输入一致",
-    "relevance_score": 0,
-    "priority": "high | medium | low",
-    "summary_cn": "用中文 2-4 句话总结论文做了什么",
-    "key_points_cn": ["关键要点1", "关键要点2", "关键要点3"],
-    "innovation_ideas_cn": ["这个工作可供用户参考的创新点/可迁移启发1", "启发2"],
-    "why_relevant_cn": "说明它和用户兴趣的关系，如果不相关也直接说清楚",
-    "limitations_cn": ["从摘要中能看出的局限或需要进一步查全文确认的点"],
-    "matched_topics": ["匹配到的主题词"]
-  }}
-]
-
-要求：
-- relevance_score 根据用户兴趣打 0-100 分，不要全部高分。
-- 不要编造摘要里没有的信息。
-- innovation_ideas_cn 要写成用户可以参考的研究启发，而不是泛泛夸奖。
-- 如果论文不相关，也要保留条目并给低分，方便后续网页筛选。
-""".strip(),
-            },
-        ]
         print(f"Analyzing batch {batch_idx}/{total_batches} with LLM...")
         try:
-            response = llm.chat(messages, temperature=0.1, max_tokens=5000)
-            parsed = extract_json_from_text(response)
-            if not isinstance(parsed, list):
-                raise ValueError("LLM analysis response is not a JSON array.")
+            parsed = analyze_summary_batch(batch, plan, interest, llm, max_tokens=5000)
             for item in parsed:
                 if isinstance(item, dict) and item.get("arxiv_id"):
                     analyzed_by_id[str(item["arxiv_id"])] = item
             batch_progress[batch_idx - 1]["status"] = "completed"
         except Exception as exc:
-            print(f"LLM analysis failed for batch {batch_idx}, using fallback for this batch: {exc}")
-            for item in fallback_analysis(batch, plan):
-                analyzed_by_id[item.get("arxiv_id", item.get("title", ""))] = item
-            batch_progress[batch_idx - 1]["status"] = "fallback"
+            print(f"LLM analysis failed for batch {batch_idx} ({len(batch)} papers): {exc}")
+            if len(batch) > 1:
+                left_batch, right_batch = split_batch_in_half(batch)
+                print(f"Retrying analysis batch {batch_idx} by splitting into {len(left_batch)} + {len(right_batch)} papers.")
+                try:
+                    for sub_batch in (left_batch, right_batch):
+                        parsed = analyze_summary_batch(sub_batch, plan, interest, llm, max_tokens=3000)
+                        for item in parsed:
+                            if isinstance(item, dict) and item.get("arxiv_id"):
+                                analyzed_by_id[str(item["arxiv_id"])] = item
+                    batch_progress[batch_idx - 1]["status"] = "split"
+                except Exception as split_exc:
+                    print(f"Split retry also failed for analysis batch {batch_idx}: {split_exc}")
+                    for item in fallback_analysis(batch, plan):
+                        item["limitations_cn"] = ensure_list(item.get("limitations_cn")) + [
+                            f"LLM 详细分析失败，已回退到摘要初筛。错误：{shorten_text(str(split_exc), 180)}"
+                        ]
+                        analyzed_by_id[item.get("arxiv_id", item.get("title", ""))] = item
+                    batch_progress[batch_idx - 1]["status"] = "fallback"
+            else:
+                for item in fallback_analysis(batch, plan):
+                    item["limitations_cn"] = ensure_list(item.get("limitations_cn")) + [
+                        f"LLM 详细分析失败，已回退到摘要初筛。错误：{shorten_text(str(exc), 180)}"
+                    ]
+                    analyzed_by_id[item.get("arxiv_id", item.get("title", ""))] = item
+                batch_progress[batch_idx - 1]["status"] = "fallback"
 
         if progress is not None:
             progress.patch(
